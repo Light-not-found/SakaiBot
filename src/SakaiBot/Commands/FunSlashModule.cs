@@ -1,12 +1,16 @@
 using Discord.Interactions;
 using System;
-using System.Text.RegularExpressions;
+using System.Collections.Concurrent;
+using System.Collections.Generic;
+using System.Linq;
 using System.Threading.Tasks;
 
 namespace SakaiBot.Commands
 {
     public class FunSlashModule : InteractionModuleBase<SocketInteractionContext>
     {
+        private static readonly ConcurrentDictionary<(ulong GuildId, ulong UserId), BlackjackGame> BlackjackGames = new();
+
         private static readonly string[] Fortunes = new[]
         {
             "Today is a great day for a new beginning.",
@@ -21,30 +25,79 @@ namespace SakaiBot.Commands
             "A small act of kindness will come back to you."
         };
 
-        [SlashCommand("roll-dice", "Roll dice using standard notation like 1d20 or 2d6+3.")]
-        public async Task RollDiceAsync(string notation = "1d20")
+        [SlashCommand("blackjack", "Start a game of blackjack.")]
+        public async Task BlackjackAsync()
         {
-            if (!TryParseDiceNotation(notation, out var count, out var sides, out var modifier))
+            if (Context.Guild is null)
             {
-                await RespondAsync("Please provide dice in the form `NdM` or `NdM+K`, like `2d6+1`.", ephemeral: true);
+                await RespondAsync("Blackjack can only be played in a server.", ephemeral: true);
                 return;
             }
 
-            var random = new Random();
-            var rolls = new int[count];
-            var sum = 0;
-
-            for (var i = 0; i < count; i++)
+            var key = (Context.Guild.Id, Context.User.Id);
+            if (BlackjackGames.ContainsKey(key))
             {
-                rolls[i] = random.Next(1, sides + 1);
-                sum += rolls[i];
+                await RespondAsync("You already have a blackjack game in progress. Use `/blackjack-hit` or `/blackjack-stand`.", ephemeral: true);
+                return;
             }
 
-            var total = sum + modifier;
-            var rollText = string.Join(", ", rolls);
-            var modifierText = modifier == 0 ? string.Empty : modifier > 0 ? $" + {modifier}" : $" - {Math.Abs(modifier)}";
+            var game = BlackjackGame.Create();
+            BlackjackGames[key] = game;
 
-            await RespondAsync($"You rolled: {rollText}{modifierText} = **{total}**", ephemeral: false);
+            if (game.PlayerValue == 21)
+            {
+                BlackjackGames.TryRemove(key, out _);
+                await RespondAsync(FormatResult("Blackjack! You win.", game, revealDealer: true), ephemeral: false);
+                return;
+            }
+
+            await RespondAsync(FormatGame("Your move. Use `/blackjack-hit` or `/blackjack-stand`.", game), ephemeral: false);
+        }
+
+        [SlashCommand("blackjack-hit", "Draw another card in your blackjack game.")]
+        public async Task BlackjackHitAsync()
+        {
+            if (!TryGetGame(out var key, out var game))
+            {
+                await RespondAsync("You do not have a blackjack game in progress. Use `/blackjack` to start one.", ephemeral: true);
+                return;
+            }
+
+            game.PlayerHand.Add(game.DrawCard());
+            if (game.PlayerValue > 21)
+            {
+                BlackjackGames.TryRemove(key, out _);
+                await RespondAsync(FormatResult("Bust. The dealer wins.", game, revealDealer: true), ephemeral: false);
+                return;
+            }
+
+            await RespondAsync(FormatGame("Your move. Use `/blackjack-hit` or `/blackjack-stand`.", game), ephemeral: false);
+        }
+
+        [SlashCommand("blackjack-stand", "Stop drawing and let the dealer play.")]
+        public async Task BlackjackStandAsync()
+        {
+            if (!TryGetGame(out var key, out var game))
+            {
+                await RespondAsync("You do not have a blackjack game in progress. Use `/blackjack` to start one.", ephemeral: true);
+                return;
+            }
+
+            while (game.DealerValue < 17)
+            {
+                game.DealerHand.Add(game.DrawCard());
+            }
+
+            var message = game.DealerValue > 21
+                ? "The dealer busts. You win!"
+                : game.PlayerValue > game.DealerValue
+                    ? "You win!"
+                    : game.PlayerValue == game.DealerValue
+                        ? "Push. It is a tie."
+                        : "The dealer wins.";
+
+            BlackjackGames.TryRemove(key, out _);
+            await RespondAsync(FormatResult(message, game, revealDealer: true), ephemeral: false);
         }
 
         [SlashCommand("fortune", "Get a random fortune.")]
@@ -73,34 +126,86 @@ namespace SakaiBot.Commands
             await RespondAsync($"{captions[random.Next(captions.Length)]}", ephemeral: false);
         }
 
-        private static bool TryParseDiceNotation(string notation, out int count, out int sides, out int modifier)
+        private bool TryGetGame(out (ulong GuildId, ulong UserId) key, out BlackjackGame game)
         {
-            count = 0;
-            sides = 0;
-            modifier = 0;
+            key = (Context.Guild?.Id ?? 0, Context.User.Id);
+            return BlackjackGames.TryGetValue(key, out game!);
+        }
 
-            var match = Regex.Match(notation.Trim(), "^(\\d+)d(\\d+)([+-]\\d+)?$", RegexOptions.IgnoreCase);
-            if (!match.Success)
+        private static string FormatGame(string message, BlackjackGame game)
+            => $"{message}\n\n**Your hand:** {FormatHand(game.PlayerHand)} = **{game.PlayerValue}**\n**Dealer:** {game.DealerHand[0]} and **hidden**";
+
+        private static string FormatResult(string message, BlackjackGame game, bool revealDealer)
+            => $"{message}\n\n**Your hand:** {FormatHand(game.PlayerHand)} = **{game.PlayerValue}**\n**Dealer's hand:** {FormatHand(game.DealerHand)} = **{game.DealerValue}";
+
+        private static string FormatHand(IEnumerable<Card> hand)
+            => string.Join(", ", hand.Select(card => card.ToString()));
+
+        private sealed class BlackjackGame
+        {
+            private readonly Queue<Card> _deck;
+
+            public List<Card> PlayerHand { get; } = new();
+            public List<Card> DealerHand { get; } = new();
+
+            public int PlayerValue => CalculateValue(PlayerHand);
+            public int DealerValue => CalculateValue(DealerHand);
+
+            private BlackjackGame(Queue<Card> deck)
             {
-                return false;
+                _deck = deck;
             }
 
-            if (!int.TryParse(match.Groups[1].Value, out count) || !int.TryParse(match.Groups[2].Value, out sides))
+            public static BlackjackGame Create()
             {
-                return false;
+                var cards = new List<Card>();
+                foreach (var suit in new[] { "Hearts", "Diamonds", "Clubs", "Spades" })
+                {
+                    foreach (var rank in new[] { "A", "2", "3", "4", "5", "6", "7", "8", "9", "10", "J", "Q", "K" })
+                    {
+                        cards.Add(new Card(rank, suit));
+                    }
+                }
+
+                for (var index = cards.Count - 1; index > 0; index--)
+                {
+                    var swapIndex = Random.Shared.Next(index + 1);
+                    (cards[index], cards[swapIndex]) = (cards[swapIndex], cards[index]);
+                }
+
+                var game = new BlackjackGame(new Queue<Card>(cards));
+                game.PlayerHand.Add(game.DrawCard());
+                game.DealerHand.Add(game.DrawCard());
+                game.PlayerHand.Add(game.DrawCard());
+                game.DealerHand.Add(game.DrawCard());
+                return game;
             }
 
-            if (count < 1 || count > 20 || sides < 2 || sides > 1000)
-            {
-                return false;
-            }
+            public Card DrawCard() => _deck.Dequeue();
 
-            if (match.Groups[3].Success)
+            private static int CalculateValue(IEnumerable<Card> hand)
             {
-                int.TryParse(match.Groups[3].Value, out modifier);
-            }
+                var value = hand.Sum(card => card.Value);
+                var aces = hand.Count(card => card.Rank == "A");
+                while (value > 21 && aces-- > 0)
+                {
+                    value -= 10;
+                }
 
-            return true;
+                return value;
+            }
+        }
+
+        private sealed record Card(string Rank, string Suit)
+        {
+            public int Value => Rank switch
+            {
+                "A" => 11,
+                "J" or "Q" or "K" => 10,
+                _ => int.Parse(Rank)
+            };
+
+            public override string ToString() => $"{Rank} of {Suit}";
         }
     }
 }
