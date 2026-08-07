@@ -36,9 +36,6 @@ namespace SakaiBot.Services
         {
             _client.Log += LogAsync;
             _client.Ready += OnReadyAsync;
-            _client.InteractionCreated += OnInteractionCreatedAsync;
-
-            await RegisterCommandsAsync();
 
             if (string.IsNullOrWhiteSpace(_token))
             {
@@ -58,15 +55,14 @@ namespace SakaiBot.Services
             return Task.CompletedTask;
         }
 
-        private async Task OnInteractionCreatedAsync(SocketInteraction interaction)
+        private Task OnInteractionCreatedAsync(SocketInteraction interaction)
         {
-            var context = new SocketInteractionContext(_client, interaction);
-            await _interactionService.ExecuteCommandAsync(context, _services);
+            return Task.CompletedTask;
         }
 
-        private async Task RegisterCommandsAsync()
+        private Task RegisterCommandsAsync()
         {
-            await _interactionService.AddModulesAsync(Assembly.GetExecutingAssembly(), _services);
+            return Task.CompletedTask;
         }
 
         private Task LogAsync(LogMessage message)
