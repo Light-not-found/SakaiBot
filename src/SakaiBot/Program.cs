@@ -6,9 +6,10 @@ var builder = WebApplication.CreateBuilder(args);
 
 builder.Services.AddHealthChecks();
 
-var databaseConnectionString = builder.Configuration.GetConnectionString("DefaultConnection")
-    ?? builder.Configuration.GetConnectionString("Postgres")
-    ?? builder.Configuration["DATABASE_URL"]
+var databaseConnectionString = Environment.GetEnvironmentVariable("DATABASE_URL")
+    ?? Environment.GetEnvironmentVariable("ConnectionStrings__Postgres")
+    ?? builder.Configuration["ConnectionStrings:Postgres"]
+    ?? builder.Configuration.GetConnectionString("DefaultConnection")
     ?? builder.Configuration["Database:ConnectionString"];
 
 if (string.IsNullOrWhiteSpace(databaseConnectionString))
