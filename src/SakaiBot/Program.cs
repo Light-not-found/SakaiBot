@@ -5,8 +5,8 @@ builder.Services.AddHealthChecks();
 
 builder.Services.AddSingleton(provider => new Discord.WebSocket.DiscordSocketClient(new Discord.WebSocket.DiscordSocketConfig
 {
-    GatewayIntents = Discord.GatewayIntents.Guilds | Discord.GatewayIntents.GuildMembers,
-    AlwaysDownloadUsers = true,
+    GatewayIntents = Discord.GatewayIntents.Guilds,
+    AlwaysDownloadUsers = false,
 }));
 
 builder.Services.AddSingleton(provider => new Discord.Interactions.InteractionService(provider.GetRequiredService<Discord.WebSocket.DiscordSocketClient>(), new Discord.Interactions.InteractionServiceConfig
