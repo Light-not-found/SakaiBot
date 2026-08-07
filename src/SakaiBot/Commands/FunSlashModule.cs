@@ -130,24 +130,6 @@ namespace SakaiBot.Commands
             await RespondAsync($"🔮 {fortune}", ephemeral: false);
         }
 
-        [SlashCommand("meme", "Get a random meme caption idea.")]
-        public async Task MemeAsync()
-        {
-            var random = new Random();
-            var captions = new[]
-            {
-                "When the bot is online but the server still sleeps.",
-                "That moment when your code compiles on the first try.",
-                "Me: I'll just write one more feature.",
-                "When the birthday reminder hits exactly on time.",
-                "Discord: 4014. Bot: I only want to moderate.",
-                "Roll initiative! The DM says it's going to be a wild night.",
-                "When the bot sees the bad word and reacts with a timeout.",
-            };
-
-            await RespondAsync($"{captions[random.Next(captions.Length)]}", ephemeral: false);
-        }
-
         private bool TryGetGame(string ownerId, out (ulong GuildId, ulong UserId) key, out BlackjackGame game)
         {
             key = (Context.Guild?.Id ?? 0, Context.User.Id);
