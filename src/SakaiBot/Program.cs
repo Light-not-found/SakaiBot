@@ -13,8 +13,20 @@ var databaseConnectionString = builder.Configuration.GetConnectionString("Defaul
 
 if (string.IsNullOrWhiteSpace(databaseConnectionString))
 {
-    throw new InvalidOperationException("Database connection string is not configured. Set ConnectionStrings:DefaultConnection or DATABASE_URL.");
+    throw new InvalidOperationException("Database connection string is not configured. Set ConnectionStrings:DefaultConnection, ConnectionStrings:Postgres, DATABASE_URL, or Database:ConnectionString.");
 }
+
+static string NormalizeConnectionString(string connectionString)
+{
+    var trimmed = connectionString.Trim();
+    if (trimmed.Length >= 2 && trimmed[0] == '"' && trimmed[^1] == '"')
+    {
+        trimmed = trimmed[1..^1];
+    }
+    return trimmed;
+}
+
+databaseConnectionString = NormalizeConnectionString(databaseConnectionString);
 
 builder.Services.AddDbContext<AppDbContext>(options =>
     options.UseNpgsql(databaseConnectionString));
