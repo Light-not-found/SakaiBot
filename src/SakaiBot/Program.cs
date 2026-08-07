@@ -7,6 +7,7 @@ var builder = WebApplication.CreateBuilder(args);
 builder.Services.AddHealthChecks();
 
 var databaseConnectionString = builder.Configuration.GetConnectionString("DefaultConnection")
+    ?? builder.Configuration.GetConnectionString("Postgres")
     ?? builder.Configuration["DATABASE_URL"]
     ?? builder.Configuration["Database:ConnectionString"];
 
@@ -28,6 +29,9 @@ builder.Services.AddSingleton(provider => new Discord.Interactions.InteractionSe
 {
     DefaultRunMode = Discord.Interactions.RunMode.Async
 }));
+
+builder.Services.AddHttpClient();
+builder.Services.AddScoped<SakaiBot.Services.ModerationLogger>();
 
 builder.Services.AddHostedService<SakaiBot.Services.BotService>();
 builder.Services.AddHostedService<SakaiBot.Services.InteractionHandler>();
