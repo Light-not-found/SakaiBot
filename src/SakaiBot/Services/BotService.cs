@@ -29,7 +29,12 @@ namespace SakaiBot.Services
             _logger = logger;
             _services = services;
 
-            _token = configuration["DISCORD:Token"] ?? configuration["DISCORD__TOKEN"] ?? string.Empty;
+            _token = configuration["DISCORD:Token"]
+                ?? configuration["DISCORD__TOKEN"]
+                ?? configuration["DISCORD_TOKEN"]
+                ?? Environment.GetEnvironmentVariable("DISCORD__TOKEN")
+                ?? Environment.GetEnvironmentVariable("DISCORD_TOKEN")
+                ?? string.Empty;
         }
 
         protected override async Task ExecuteAsync(CancellationToken stoppingToken)
@@ -37,21 +42,32 @@ namespace SakaiBot.Services
             _client.Log += LogAsync;
             _client.Ready += OnReadyAsync;
 
+            _logger.LogInformation("Discord token loaded: {HasToken}", string.IsNullOrWhiteSpace(_token) ? "no" : "yes");
+
             if (string.IsNullOrWhiteSpace(_token))
             {
                 _logger.LogError("Discord bot token is not configured. Set DISCORD__TOKEN in environment variables or secrets.");
                 return;
             }
 
-            await _client.LoginAsync(TokenType.Bot, _token);
-            await _client.StartAsync();
+            try
+            {
+                await _client.LoginAsync(TokenType.Bot, _token);
+                await _client.StartAsync();
+                _logger.LogInformation("Discord client login started.");
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Discord login failed.");
+                return;
+            }
 
             await Task.Delay(Timeout.Infinite, stoppingToken);
         }
 
         private Task OnReadyAsync()
         {
-            _logger.LogInformation("Discord bot connected as {BotUser}", _client.CurrentUser?.Username);
+            _logger.LogInformation("Discord bot connected as {BotUser} ({BotId})", _client.CurrentUser?.Username, _client.CurrentUser?.Id);
             return Task.CompletedTask;
         }
 
