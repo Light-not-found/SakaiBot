@@ -1,8 +1,10 @@
+using Discord;
 using Discord.Interactions;
 using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Linq;
+using System.Security.Cryptography;
 using System.Threading.Tasks;
 
 namespace SakaiBot.Commands
@@ -37,7 +39,7 @@ namespace SakaiBot.Commands
             var key = (Context.Guild.Id, Context.User.Id);
             if (BlackjackGames.ContainsKey(key))
             {
-                await RespondAsync("You already have a blackjack game in progress. Use `/blackjack-hit` or `/blackjack-stand`.", ephemeral: true);
+                await RespondAsync("You already have a blackjack game in progress. Use the buttons on your current game.", ephemeral: true);
                 return;
             }
 
@@ -47,19 +49,19 @@ namespace SakaiBot.Commands
             if (game.PlayerValue == 21)
             {
                 BlackjackGames.TryRemove(key, out _);
-                await RespondAsync(FormatResult("Blackjack! You win.", game, revealDealer: true), ephemeral: false);
+                await RespondAsync(embed: BuildGameEmbed("Blackjack! You win.", game, revealDealer: true, Color.Green), components: BuildButtons(Context.User.Id, disabled: true), ephemeral: false);
                 return;
             }
 
-            await RespondAsync(FormatGame("Your move. Use `/blackjack-hit` or `/blackjack-stand`.", game), ephemeral: false);
+            await RespondAsync(embed: BuildGameEmbed("Your move. Choose Hit or Stand.", game, revealDealer: false, Color.Blue), components: BuildButtons(Context.User.Id, disabled: false), ephemeral: false);
         }
 
-        [SlashCommand("blackjack-hit", "Draw another card in your blackjack game.")]
-        public async Task BlackjackHitAsync()
+        [ComponentInteraction("blackjack-hit:*")]
+        public async Task BlackjackHitButtonAsync(string ownerId)
         {
-            if (!TryGetGame(out var key, out var game))
+            if (!TryGetGame(ownerId, out var key, out var game))
             {
-                await RespondAsync("You do not have a blackjack game in progress. Use `/blackjack` to start one.", ephemeral: true);
+                await RespondAsync("This blackjack game belongs to another player or has ended.", ephemeral: true);
                 return;
             }
 
@@ -67,19 +69,19 @@ namespace SakaiBot.Commands
             if (game.PlayerValue > 21)
             {
                 BlackjackGames.TryRemove(key, out _);
-                await RespondAsync(FormatResult("Bust. The dealer wins.", game, revealDealer: true), ephemeral: false);
+                await UpdateGameAsync("Bust. The dealer wins.", game, revealDealer: true, Color.Red, disabled: true);
                 return;
             }
 
-            await RespondAsync(FormatGame("Your move. Use `/blackjack-hit` or `/blackjack-stand`.", game), ephemeral: false);
+            await UpdateGameAsync("Your move. Choose Hit or Stand.", game, revealDealer: false, Color.Blue, disabled: false);
         }
 
-        [SlashCommand("blackjack-stand", "Stop drawing and let the dealer play.")]
-        public async Task BlackjackStandAsync()
+        [ComponentInteraction("blackjack-stand:*")]
+        public async Task BlackjackStandButtonAsync(string ownerId)
         {
-            if (!TryGetGame(out var key, out var game))
+            if (!TryGetGame(ownerId, out var key, out var game))
             {
-                await RespondAsync("You do not have a blackjack game in progress. Use `/blackjack` to start one.", ephemeral: true);
+                await RespondAsync("This blackjack game belongs to another player or has ended.", ephemeral: true);
                 return;
             }
 
@@ -97,7 +99,27 @@ namespace SakaiBot.Commands
                         : "The dealer wins.";
 
             BlackjackGames.TryRemove(key, out _);
-            await RespondAsync(FormatResult(message, game, revealDealer: true), ephemeral: false);
+            await UpdateGameAsync(message, game, revealDealer: true, game.DealerValue > 21 || game.PlayerValue > game.DealerValue ? Color.Green : Color.Red, disabled: true);
+        }
+
+        [ComponentInteraction("blackjack-new:*")]
+        public async Task BlackjackNewButtonAsync(string ownerId)
+        {
+            if (!ulong.TryParse(ownerId, out var userId) || userId != Context.User.Id)
+            {
+                await RespondAsync("This blackjack game belongs to another player.", ephemeral: true);
+                return;
+            }
+
+            var key = (Context.Guild?.Id ?? 0, userId);
+            var game = BlackjackGame.Create();
+            BlackjackGames[key] = game;
+
+            await UpdateGameAsync(game.PlayerValue == 21 ? "Blackjack! You win." : "Your move. Choose Hit or Stand.", game, game.PlayerValue == 21, game.PlayerValue == 21 ? Color.Green : Color.Blue, disabled: game.PlayerValue == 21);
+            if (game.PlayerValue == 21)
+            {
+                BlackjackGames.TryRemove(key, out _);
+            }
         }
 
         [SlashCommand("fortune", "Get a random fortune.")]
@@ -126,17 +148,50 @@ namespace SakaiBot.Commands
             await RespondAsync($"{captions[random.Next(captions.Length)]}", ephemeral: false);
         }
 
-        private bool TryGetGame(out (ulong GuildId, ulong UserId) key, out BlackjackGame game)
+        private bool TryGetGame(string ownerId, out (ulong GuildId, ulong UserId) key, out BlackjackGame game)
         {
             key = (Context.Guild?.Id ?? 0, Context.User.Id);
+            if (!ulong.TryParse(ownerId, out var ownerUserId) || ownerUserId != Context.User.Id)
+            {
+                game = null!;
+                return false;
+            }
+
             return BlackjackGames.TryGetValue(key, out game!);
         }
 
-        private static string FormatGame(string message, BlackjackGame game)
-            => $"{message}\n\n**Your hand:** {FormatHand(game.PlayerHand)} = **{game.PlayerValue}**\n**Dealer:** {game.DealerHand[0]} and **hidden**";
+        private async Task UpdateGameAsync(string message, BlackjackGame game, bool revealDealer, Color color, bool disabled)
+        {
+            await DeferAsync();
+            await ModifyOriginalResponseAsync(properties =>
+            {
+                properties.Embed = BuildGameEmbed(message, game, revealDealer, color);
+                properties.Components = BuildButtons(Context.User.Id, disabled);
+            });
+        }
 
-        private static string FormatResult(string message, BlackjackGame game, bool revealDealer)
-            => $"{message}\n\n**Your hand:** {FormatHand(game.PlayerHand)} = **{game.PlayerValue}**\n**Dealer's hand:** {FormatHand(game.DealerHand)} = **{game.DealerValue}";
+        private static Embed BuildGameEmbed(string message, BlackjackGame game, bool revealDealer, Color color)
+        {
+            var embed = new EmbedBuilder()
+                .WithTitle("Blackjack")
+                .WithDescription(message)
+                .WithColor(color)
+                .AddField("Your hand", $"{FormatHand(game.PlayerHand)}\nValue: **{game.PlayerValue}**")
+                .WithCurrentTimestamp();
+
+            embed.AddField("Dealer's hand", revealDealer
+                ? $"{FormatHand(game.DealerHand)}\nValue: **{game.DealerValue}**"
+                : $"{game.DealerHand[0]} and **hidden**");
+
+            return embed.Build();
+        }
+
+        private static MessageComponent BuildButtons(ulong userId, bool disabled)
+            => new ComponentBuilder()
+                .WithButton("Hit", $"blackjack-hit:{userId}", ButtonStyle.Primary, disabled: disabled)
+                .WithButton("Stand", $"blackjack-stand:{userId}", ButtonStyle.Success, disabled: disabled)
+                .WithButton("New Game", $"blackjack-new:{userId}", ButtonStyle.Secondary)
+                .Build();
 
         private static string FormatHand(IEnumerable<Card> hand)
             => string.Join(", ", hand.Select(card => card.ToString()));
@@ -169,7 +224,7 @@ namespace SakaiBot.Commands
 
                 for (var index = cards.Count - 1; index > 0; index--)
                 {
-                    var swapIndex = Random.Shared.Next(index + 1);
+                    var swapIndex = RandomNumberGenerator.GetInt32(index + 1);
                     (cards[index], cards[swapIndex]) = (cards[swapIndex], cards[index]);
                 }
 
