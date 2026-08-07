@@ -18,7 +18,7 @@ namespace SakaiBot.Commands
             _dbContext = dbContext;
         }
 
-        [SlashCommand("birthday-set", "Set your birthday.")]
+        [SlashCommand("setbirthday", "Set your birthday.")]
         public async Task SetBirthdayAsync(int day, int month, int year)
         {
             if (Context.Guild is null)
@@ -59,7 +59,7 @@ namespace SakaiBot.Commands
             await RespondAsync($"Your birthday has been updated to {birthDate:MMMM d, yyyy}. You are {GetAge(birthDate)} years old.", ephemeral: true);
         }
 
-        [SlashCommand("birthday-get", "Get your saved birthday.")]
+        [SlashCommand("getbirthday", "Get your saved birthday.")]
         public async Task GetBirthdayAsync()
         {
             if (Context.Guild is null)
@@ -80,7 +80,7 @@ namespace SakaiBot.Commands
             await RespondAsync($"Your birthday is {record.BirthDate:MMMM d, yyyy}. You are {GetAge(record.BirthDate)} years old.", ephemeral: true);
         }
 
-        [SlashCommand("birthday-next", "Show the next birthday in this server.")]
+        [SlashCommand("nextbirthday", "Show the next birthday in this server.")]
         public async Task NextBirthdayAsync()
         {
             if (Context.Guild is null)
@@ -120,7 +120,7 @@ namespace SakaiBot.Commands
             await RespondAsync($"The next birthday is {mention} on {next.BirthDate:MMMM d} ({dayText}).", ephemeral: false);
         }
 
-        [SlashCommand("birthday-list", "List saved birthdays in this server.")]
+        [SlashCommand("listbirthdays", "List saved birthdays in this server.")]
         public async Task ListBirthdaysAsync()
         {
             if (Context.Guild is null)
@@ -157,7 +157,7 @@ namespace SakaiBot.Commands
             await RespondAsync(embed: embed.Build(), ephemeral: false);
         }
 
-        [SlashCommand("birthday-remove", "Remove your saved birthday.")]
+        [SlashCommand("removebirthday", "Remove your saved birthday.")]
         public async Task RemoveBirthdayAsync()
         {
             if (Context.Guild is null)

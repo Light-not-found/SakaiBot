@@ -144,5 +144,38 @@ namespace SakaiBot.Commands
 
             await ModifyOriginalResponseAsync(properties => properties.Embed = embed.Build());
         }
+
+        [SlashCommand("removewarning", "Remove a warning from a user's moderation history.")]
+        [RequireUserPermission(GuildPermission.ModerateMembers)]
+        public async Task RemoveWarningAsync(SocketGuildUser user, string caseid)
+        {
+            await DeferAsync(ephemeral: true);
+
+            var normalizedCaseId = caseid.Trim();
+            var matches = await _dbContext.Punishments
+                .Where(x => x.GuildId == Context.Guild!.Id
+                    && x.UserId == user.Id
+                    && x.Action == PunishmentType.Warn
+                    && x.CaseId.StartsWith(normalizedCaseId))
+                .ToListAsync();
+
+            if (matches.Count == 0)
+            {
+                await ModifyOriginalResponseAsync(properties => properties.Content = "No warning matched that case ID for this user.");
+                return;
+            }
+
+            if (matches.Count > 1)
+            {
+                await ModifyOriginalResponseAsync(properties => properties.Content = "That case ID is not specific enough. Use more characters from the case ID.");
+                return;
+            }
+
+            var warning = matches[0];
+            _dbContext.Punishments.Remove(warning);
+            await _dbContext.SaveChangesAsync();
+
+            await ModifyOriginalResponseAsync(properties => properties.Content = $"Removed warning case `{warning.CaseId[..8]}` from {user.Mention}.");
+        }
     }
 }
