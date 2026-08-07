@@ -1,0 +1,11 @@
+.git
+.github
+.vs
+**/bin
+**/obj
+**/.idea
+**/.vscode
+.env
+*.user
+*.suo
+README*

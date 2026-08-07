@@ -1,0 +1,32 @@
+name: Deploy to Koyeb
+
+on:
+  workflow_dispatch:
+    inputs:
+      image_tag:
+        description: 'Image tag to deploy'
+        required: false
+        default: 'latest'
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Deploy container over SSH
+        uses: appleboy/ssh-action@v1.0.1
+        env:
+          IMAGE: ghcr.io/${{ github.repository_owner }}/sakaibot:${{ inputs.image_tag }}
+          GHCR_TOKEN: ${{ secrets.GHCR_TOKEN }}
+          DISCORD_TOKEN: ${{ secrets.DISCORD_TOKEN }}
+        with:
+          host: ${{ secrets.KOYEB_HOST }}
+          username: ${{ secrets.KOYEB_USERNAME }}
+          key: ${{ secrets.KOYEB_SSH_PRIVATE_KEY }}
+          envs: IMAGE,GHCR_TOKEN,DISCORD_TOKEN
+          script: |
+            set -e
+            echo "$GHCR_TOKEN" | docker login ghcr.io -u ${{ github.repository_owner }} --password-stdin
+            docker pull "$IMAGE"
+            docker rm -f sakaibot || true
+            docker run -d --name sakaibot --restart unless-stopped -e DISCORD__TOKEN="$DISCORD_TOKEN" "$IMAGE"
