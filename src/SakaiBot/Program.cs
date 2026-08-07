@@ -67,15 +67,8 @@ app.MapGet("/health/db", async (AppDbContext dbContext) =>
         ? Results.Ok(new { status = "ok", database = "connected" })
         : Results.StatusCode(StatusCodes.Status503ServiceUnavailable);
 });
-app.MapGet("/dashboard", async (HttpRequest request, AppDbContext dbContext, string? search) =>
+app.MapGet("/dashboard", async (AppDbContext dbContext, string? search) =>
 {
-    var dashboardToken = Environment.GetEnvironmentVariable("DASHBOARD_TOKEN");
-    if (string.IsNullOrWhiteSpace(dashboardToken)
-        || request.Headers["X-Dashboard-Token"] != dashboardToken)
-    {
-        return Results.Unauthorized();
-    }
-
     var query = dbContext.Punishments.AsNoTracking().AsQueryable();
     if (!string.IsNullOrWhiteSpace(search))
     {
