@@ -14,14 +14,12 @@ namespace SakaiBot.Services
         private readonly AppDbContext _dbContext;
         private readonly IHttpClientFactory _httpClientFactory;
         private readonly ILogger<ModerationLogger> _logger;
-        private readonly string? _webhookUrl;
 
-        public ModerationLogger(AppDbContext dbContext, IHttpClientFactory httpClientFactory, IConfiguration configuration, ILogger<ModerationLogger> logger)
+        public ModerationLogger(AppDbContext dbContext, IHttpClientFactory httpClientFactory, ILogger<ModerationLogger> logger)
         {
             _dbContext = dbContext;
             _httpClientFactory = httpClientFactory;
             _logger = logger;
-            _webhookUrl = configuration["MODERATION_WEBHOOK_URL"];
         }
 
         public async Task LogAsync(Punishment punishment)
@@ -32,13 +30,19 @@ namespace SakaiBot.Services
             await _dbContext.Punishments.AddAsync(punishment);
             await _dbContext.SaveChangesAsync();
 
-            if (!string.IsNullOrWhiteSpace(_webhookUrl))
+            var settings = await _dbContext.GuildSettings.FindAsync(punishment.GuildId);
+            if (settings?.ModChannelId is ulong modChannelId)
             {
-                await SendWebhookAsync(punishment);
+                _logger.LogInformation("Moderation case {CaseId} configured for mod channel {ChannelId}.", punishment.CaseId, modChannelId);
+            }
+
+            if (!string.IsNullOrWhiteSpace(settings?.LogWebhookUrl))
+            {
+                await SendWebhookAsync(punishment, settings.LogWebhookUrl);
             }
         }
 
-        private async Task SendWebhookAsync(Punishment punishment)
+        private async Task SendWebhookAsync(Punishment punishment, string webhookUrl)
         {
             try
             {
@@ -63,7 +67,7 @@ namespace SakaiBot.Services
                     }
                 };
 
-                var response = await client.PostAsJsonAsync(_webhookUrl, payload);
+                var response = await client.PostAsJsonAsync(webhookUrl, payload);
                 if (!response.IsSuccessStatusCode)
                 {
                     var body = await response.Content.ReadAsStringAsync();

@@ -12,6 +12,9 @@ namespace SakaiBot.Data
 
         public DbSet<Birthday> Birthdays => Set<Birthday>();
         public DbSet<Punishment> Punishments => Set<Punishment>();
+        public DbSet<EconomyAccount> EconomyAccounts => Set<EconomyAccount>();
+        public DbSet<GuildSettings> GuildSettings => Set<GuildSettings>();
+        public DbSet<Appeal> Appeals => Set<Appeal>();
 
         protected override void OnModelCreating(ModelBuilder modelBuilder)
         {
@@ -39,6 +42,27 @@ namespace SakaiBot.Data
                 entity.Property(e => e.CaseId).IsRequired().HasMaxLength(50);
                 entity.HasIndex(e => e.CaseId).IsUnique();
             });
+
+            modelBuilder.Entity<EconomyAccount>(entity =>
+            {
+                entity.HasKey(e => e.Id);
+                entity.HasIndex(e => new { e.GuildId, e.UserId }).IsUnique();
+                entity.Property(e => e.Balance).IsRequired();
+            });
+
+            modelBuilder.Entity<GuildSettings>(entity =>
+            {
+                entity.HasKey(e => e.GuildId);
+                entity.Property(e => e.LogWebhookUrl).HasMaxLength(500);
+            });
+
+            modelBuilder.Entity<Appeal>(entity =>
+            {
+                entity.HasKey(e => e.Id);
+                entity.Property(e => e.Message).IsRequired().HasMaxLength(1000);
+                entity.Property(e => e.CreatedAt).IsRequired();
+            });
+
         }
     }
 }

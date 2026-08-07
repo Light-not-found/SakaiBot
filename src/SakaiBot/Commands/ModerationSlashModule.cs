@@ -56,12 +56,18 @@ namespace SakaiBot.Commands
         [SlashCommand("mute", "Mute a user in the server.")]
         [RequireUserPermission(GuildPermission.MuteMembers)]
         [RequireBotPermission(GuildPermission.MuteMembers)]
-        public async Task MuteAsync(SocketGuildUser user, string reason = "No reason provided")
+        public async Task MuteAsync(SocketGuildUser user, int duration = 10, string reason = "No reason provided")
         {
+            if (duration < 1 || duration > 40320)
+            {
+                await RespondAsync("Mute duration must be between 1 minute and 28 days.", ephemeral: true);
+                return;
+            }
+
             await DeferAsync(ephemeral: true);
-            await user.ModifyAsync(x => x.Mute = true);
+            await user.SetTimeOutAsync(TimeSpan.FromMinutes(duration));
             await _moderationLogger.LogAsync(CreatePunishment(user.Id, Context.User.Id, PunishmentType.Mute, reason));
-            await ModifyOriginalResponseAsync(properties => properties.Content = $"Muted {user.Username}#{user.Discriminator} for: {reason}. Case saved.");
+            await ModifyOriginalResponseAsync(properties => properties.Content = $"Muted {user.Username}#{user.Discriminator} for {duration} minutes: {reason}. Case saved.");
         }
 
         [SlashCommand("unmute", "Unmute a user in the server.")]
@@ -96,18 +102,29 @@ namespace SakaiBot.Commands
         public async Task WarnAsync(SocketGuildUser user, string reason = "No reason provided")
         {
             await DeferAsync(ephemeral: true);
-            await _moderationLogger.LogAsync(CreatePunishment(user.Id, Context.User.Id, PunishmentType.Warn, reason));
+            var punishment = CreatePunishment(user.Id, Context.User.Id, PunishmentType.Warn, reason);
+            await _moderationLogger.LogAsync(punishment);
+            var warningCount = await _dbContext.Punishments.CountAsync(x =>
+                x.GuildId == Context.Guild!.Id && x.UserId == user.Id && x.Action == PunishmentType.Warn);
+            var escalation = string.Empty;
+            if (warningCount >= 3)
+            {
+                await user.SetTimeOutAsync(TimeSpan.FromHours(1));
+                escalation = " They reached 3 warnings, so they were timed out for 1 hour.";
+            }
+
             var embed = new EmbedBuilder()
                 .WithTitle("User Warned")
-                .WithDescription($"{user.Mention} was warned by {Context.User.Mention}. The punishment was saved to the database.")
+                .WithDescription($"{user.Mention} was warned by {Context.User.Mention}. The punishment was saved to the database.{escalation}")
                 .AddField("Reason", reason)
+                .AddField("Warnings", warningCount, inline: true)
                 .WithColor(Color.Orange)
                 .Build();
 
             await ModifyOriginalResponseAsync(properties => properties.Embed = embed);
         }
 
-        [SlashCommand("punishments", "View a user's moderation history.")]
+        [SlashCommand("modlog", "View a user's moderation history.")]
         [RequireUserPermission(GuildPermission.ModerateMembers)]
         public async Task PunishmentsAsync(SocketGuildUser user)
         {
@@ -145,6 +162,26 @@ namespace SakaiBot.Commands
             await ModifyOriginalResponseAsync(properties => properties.Embed = embed.Build());
         }
 
+        [SlashCommand("clearwarnings", "Remove all warnings from a user.")]
+        [RequireUserPermission(GuildPermission.ModerateMembers)]
+        public async Task ClearWarningsAsync(SocketGuildUser user)
+        {
+            await DeferAsync(ephemeral: true);
+            var warnings = await _dbContext.Punishments
+                .Where(x => x.GuildId == Context.Guild!.Id && x.UserId == user.Id && x.Action == PunishmentType.Warn)
+                .ToListAsync();
+
+            if (warnings.Count == 0)
+            {
+                await ModifyOriginalResponseAsync(properties => properties.Content = $"{user.Mention} has no warnings.");
+                return;
+            }
+
+            _dbContext.Punishments.RemoveRange(warnings);
+            await _dbContext.SaveChangesAsync();
+            await ModifyOriginalResponseAsync(properties => properties.Content = $"Cleared {warnings.Count} warning{(warnings.Count == 1 ? string.Empty : "s")} for {user.Mention}.");
+        }
+
         [SlashCommand("removewarning", "Remove a warning from a user's moderation history.")]
         [RequireUserPermission(GuildPermission.ModerateMembers)]
         public async Task RemoveWarningAsync(SocketGuildUser user, string caseid)
@@ -176,6 +213,34 @@ namespace SakaiBot.Commands
             await _dbContext.SaveChangesAsync();
 
             await ModifyOriginalResponseAsync(properties => properties.Content = $"Removed warning case `{warning.CaseId[..8]}` from {user.Mention}.");
+        }
+
+        [SlashCommand("appeal", "Submit a moderation appeal.")]
+        public async Task AppealAsync(string message)
+        {
+            if (Context.Guild is null)
+            {
+                await RespondAsync("This command can only be used in a server.", ephemeral: true);
+                return;
+            }
+
+            if (message.Length < 10 || message.Length > 1000)
+            {
+                await RespondAsync("Your appeal must be between 10 and 1,000 characters.", ephemeral: true);
+                return;
+            }
+
+            var appeal = new Appeal
+            {
+                GuildId = Context.Guild.Id,
+                UserId = Context.User.Id,
+                Message = message,
+                CreatedAt = DateTime.UtcNow
+            };
+
+            await _dbContext.Appeals.AddAsync(appeal);
+            await _dbContext.SaveChangesAsync();
+            await RespondAsync("Your appeal has been submitted for moderator review.", ephemeral: true);
         }
     }
 }

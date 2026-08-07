@@ -1,5 +1,8 @@
 using Discord;
 using Discord.Interactions;
+using Microsoft.EntityFrameworkCore;
+using SakaiBot.Data;
+using SakaiBot.Models;
 using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
@@ -11,6 +14,7 @@ namespace SakaiBot.Commands
 {
     public class FunSlashModule : InteractionModuleBase<SocketInteractionContext>
     {
+        private readonly AppDbContext _dbContext;
         private static readonly ConcurrentDictionary<(ulong GuildId, ulong UserId), BlackjackGame> BlackjackGames = new();
 
         private static readonly string[] Fortunes = new[]
@@ -27,8 +31,13 @@ namespace SakaiBot.Commands
             "A small act of kindness will come back to you."
         };
 
+        public FunSlashModule(AppDbContext dbContext)
+        {
+            _dbContext = dbContext;
+        }
+
         [SlashCommand("blackjack", "Start a game of blackjack.")]
-        public async Task BlackjackAsync()
+        public async Task BlackjackAsync(int bet = 100)
         {
             if (Context.Guild is null)
             {
@@ -37,19 +46,36 @@ namespace SakaiBot.Commands
             }
 
             var key = (Context.Guild.Id, Context.User.Id);
+            if (bet < 10 || bet > 100000)
+            {
+                await RespondAsync("Your bet must be between 10 and 100,000 credits.", ephemeral: true);
+                return;
+            }
+
             if (BlackjackGames.ContainsKey(key))
             {
                 await RespondAsync("You already have a blackjack game in progress. Use the buttons on your current game.", ephemeral: true);
                 return;
             }
 
-            var game = BlackjackGame.Create();
+            var account = await GetAccountAsync(Context.Guild.Id, Context.User.Id);
+            if (account.Balance < bet)
+            {
+                await RespondAsync($"You need {bet:N0} credits, but your balance is {account.Balance:N0}.", ephemeral: true);
+                return;
+            }
+
+            account.Balance -= bet;
+            await _dbContext.SaveChangesAsync();
+            var game = BlackjackGame.Create(bet);
             BlackjackGames[key] = game;
 
             if (game.PlayerValue == 21)
             {
                 BlackjackGames.TryRemove(key, out _);
-                await RespondAsync(embed: BuildGameEmbed("Blackjack! You win.", game, revealDealer: true, Color.Green), components: BuildButtons(Context.User.Id, disabled: true), ephemeral: false);
+                account.Balance += (int)(bet * 2.5m);
+                await _dbContext.SaveChangesAsync();
+                await RespondAsync(embed: BuildGameEmbed("Blackjack! You win 2.5x your bet.", game, revealDealer: true, Color.Green), components: BuildButtons(Context.User.Id, disabled: true), ephemeral: false);
                 return;
             }
 
@@ -98,6 +124,18 @@ namespace SakaiBot.Commands
                         ? "Push. It is a tie."
                         : "The dealer wins.";
 
+            var account = await GetAccountAsync(key.GuildId, key.UserId);
+            if (game.DealerValue > 21 || game.PlayerValue > game.DealerValue)
+            {
+                account.Balance += game.Bet * 2;
+            }
+            else if (game.PlayerValue == game.DealerValue)
+            {
+                account.Balance += game.Bet;
+            }
+
+            await _dbContext.SaveChangesAsync();
+
             BlackjackGames.TryRemove(key, out _);
             await UpdateGameAsync(message, game, revealDealer: true, game.DealerValue > 21 || game.PlayerValue > game.DealerValue ? Color.Green : Color.Red, disabled: true);
         }
@@ -112,7 +150,17 @@ namespace SakaiBot.Commands
             }
 
             var key = (Context.Guild?.Id ?? 0, userId);
-            var game = BlackjackGame.Create();
+            var account = await GetAccountAsync(key.Item1, userId);
+            const int defaultBet = 100;
+            if (account.Balance < defaultBet)
+            {
+                await RespondAsync($"You need {defaultBet:N0} credits to start a new game.", ephemeral: true);
+                return;
+            }
+
+            account.Balance -= defaultBet;
+            await _dbContext.SaveChangesAsync();
+            var game = BlackjackGame.Create(defaultBet);
             BlackjackGames[key] = game;
 
             await UpdateGameAsync(game.PlayerValue == 21 ? "Blackjack! You win." : "Your move. Choose Hit or Stand.", game, game.PlayerValue == 21, game.PlayerValue == 21 ? Color.Green : Color.Blue, disabled: game.PlayerValue == 21);
@@ -128,6 +176,91 @@ namespace SakaiBot.Commands
             var random = new Random();
             var fortune = Fortunes[random.Next(Fortunes.Length)];
             await RespondAsync($"🔮 {fortune}", ephemeral: false);
+        }
+
+        [SlashCommand("balance", "Show your virtual credit balance.")]
+        public async Task BalanceAsync()
+        {
+            if (Context.Guild is null)
+            {
+                await RespondAsync("This command can only be used in a server.", ephemeral: true);
+                return;
+            }
+
+            var account = await GetAccountAsync(Context.Guild.Id, Context.User.Id);
+            await RespondAsync($"You have **{account.Balance:N0} credits**.", ephemeral: true);
+        }
+
+        [SlashCommand("daily", "Claim your daily virtual credits.")]
+        public async Task DailyAsync()
+        {
+            if (Context.Guild is null)
+            {
+                await RespondAsync("This command can only be used in a server.", ephemeral: true);
+                return;
+            }
+
+            var account = await GetAccountAsync(Context.Guild.Id, Context.User.Id);
+            if (account.LastDailyClaimedAt.HasValue && DateTime.UtcNow - account.LastDailyClaimedAt.Value < TimeSpan.FromHours(24))
+            {
+                var remaining = TimeSpan.FromHours(24) - (DateTime.UtcNow - account.LastDailyClaimedAt.Value);
+                await RespondAsync($"You already claimed your daily reward. Try again in {remaining.Hours}h {remaining.Minutes}m.", ephemeral: true);
+                return;
+            }
+
+            account.Balance += 500;
+            account.LastDailyClaimedAt = DateTime.UtcNow;
+            await _dbContext.SaveChangesAsync();
+            await RespondAsync($"You claimed **500 credits**. Balance: **{account.Balance:N0}**.", ephemeral: true);
+        }
+
+        [SlashCommand("blackjackleaderboard", "Show the richest players in this server.")]
+        public async Task BlackjackLeaderboardAsync()
+        {
+            if (Context.Guild is null)
+            {
+                await RespondAsync("This command can only be used in a server.", ephemeral: true);
+                return;
+            }
+
+            var accounts = await _dbContext.EconomyAccounts
+                .AsNoTracking()
+                .Where(x => x.GuildId == Context.Guild.Id)
+                .OrderByDescending(x => x.Balance)
+                .Take(10)
+                .ToListAsync();
+
+            var embed = new EmbedBuilder()
+                .WithTitle($"{Context.Guild.Name} Credit Leaderboard")
+                .WithColor(Color.Gold);
+
+            if (accounts.Count == 0)
+            {
+                embed.WithDescription("No players have an economy account yet.");
+            }
+            else
+            {
+                for (var index = 0; index < accounts.Count; index++)
+                {
+                    var user = Context.Guild.GetUser(accounts[index].UserId);
+                    embed.AddField($"#{index + 1} {user?.Username ?? $"<@{accounts[index].UserId}>"}", $"{accounts[index].Balance:N0} credits", inline: false);
+                }
+            }
+
+            await RespondAsync(embed: embed.Build(), ephemeral: false);
+        }
+
+        private async Task<EconomyAccount> GetAccountAsync(ulong guildId, ulong userId)
+        {
+            var account = await _dbContext.EconomyAccounts.FirstOrDefaultAsync(x => x.GuildId == guildId && x.UserId == userId);
+            if (account is null)
+            {
+                account = new EconomyAccount { GuildId = guildId, UserId = userId };
+                await _dbContext.EconomyAccounts.AddAsync(account);
+                await _dbContext.SaveChangesAsync();
+            }
+
+            return account;
         }
 
         private bool TryGetGame(string ownerId, out (ulong GuildId, ulong UserId) key, out BlackjackGame game)
@@ -187,20 +320,25 @@ namespace SakaiBot.Commands
 
             public int PlayerValue => CalculateValue(PlayerHand);
             public int DealerValue => CalculateValue(DealerHand);
+            public int Bet { get; }
 
-            private BlackjackGame(Queue<Card> deck)
+            private BlackjackGame(Queue<Card> deck, int bet)
             {
                 _deck = deck;
+                Bet = bet;
             }
 
-            public static BlackjackGame Create()
+            public static BlackjackGame Create(int bet)
             {
                 var cards = new List<Card>();
-                foreach (var suit in new[] { "Hearts", "Diamonds", "Clubs", "Spades" })
+                for (var deck = 0; deck < 4; deck++)
                 {
-                    foreach (var rank in new[] { "A", "2", "3", "4", "5", "6", "7", "8", "9", "10", "J", "Q", "K" })
+                    foreach (var suit in new[] { "Hearts", "Diamonds", "Clubs", "Spades" })
                     {
-                        cards.Add(new Card(rank, suit));
+                        foreach (var rank in new[] { "A", "2", "3", "4", "5", "6", "7", "8", "9", "10", "J", "Q", "K" })
+                        {
+                            cards.Add(new Card(rank, suit));
+                        }
                     }
                 }
 
@@ -210,7 +348,7 @@ namespace SakaiBot.Commands
                     (cards[index], cards[swapIndex]) = (cards[swapIndex], cards[index]);
                 }
 
-                var game = new BlackjackGame(new Queue<Card>(cards));
+                var game = new BlackjackGame(new Queue<Card>(cards), bet);
                 game.PlayerHand.Add(game.DrawCard());
                 game.DealerHand.Add(game.DrawCard());
                 game.PlayerHand.Add(game.DrawCard());
